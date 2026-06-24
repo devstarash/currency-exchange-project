@@ -1,0 +1,4 @@
+db.URL = jdbc:postgresql://localhost:5432/YOUR_DATABASE_NAME
+db.driver =org.postgresql.Driver
+db.username = YOUR_USERNAME
+db.password =  YOUR_PASSWORD
