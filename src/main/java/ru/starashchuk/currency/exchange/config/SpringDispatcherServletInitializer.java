@@ -3,7 +3,7 @@ package ru.starashchuk.currency.exchange.config;
 import org.jspecify.annotations.Nullable;
 import org.springframework.web.servlet.support.AbstractAnnotationConfigDispatcherServletInitializer;
 
-public class MySpringDispatcherServletInitializer extends AbstractAnnotationConfigDispatcherServletInitializer {
+public class SpringDispatcherServletInitializer extends AbstractAnnotationConfigDispatcherServletInitializer {
     private final String servletMappingsPath = "/";
 
     @Override

@@ -1,125 +1,158 @@
 package ru.starashchuk.currency.exchange.service;
 
-
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import ru.starashchuk.currency.exchange.controller.exception.*;
-import ru.starashchuk.currency.exchange.dao.CurrencyDAO;
-import ru.starashchuk.currency.exchange.dao.ExchangeRateDAO;
-import ru.starashchuk.currency.exchange.model.Currency;
-import ru.starashchuk.currency.exchange.model.ExchangeRate;
-import ru.starashchuk.currency.exchange.model.ExchangeRateCreation;
-import ru.starashchuk.currency.exchange.model.ExchangeRateResponse;
+import ru.starashchuk.currency.exchange.controller.exception.template.ExchangeRateExceptionTemplate;
+import ru.starashchuk.currency.exchange.dao.ExchangeRateDao;
+import ru.starashchuk.currency.exchange.model.*;
 
 import java.math.BigDecimal;
 import java.util.List;
-import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
 public class ExchangeRateService {
-    private final ExchangeRateDAO exchangeRateDAO;
-    private final CurrencyDAO currencyDAO;
+    private final ExchangeRateDao exchangeRateDao;
+    private final CurrencyService currencyService;
     private static final int CURRENCY_CODE_LENGTH = 3;
-    private static final String CURRENCY_NOT_FOUND_TEMPLATE = "Currency with code %s not found";
-    private static final String RATE_NOT_FOUND_TEMPLATE = "The exchange rate for the %s-%s pair not found";
-    private static final String RATE_AlREADY_EXIST_TEMPLATE = "The exchange rate for the %s-%s pair already exist";
-    private static final String CURRENCY_PAIR_FILED_EMPTY_EXCEPTION_MESSAGE = """
-            The currency pair is missing from the address""";
 
     public List<ExchangeRateResponse> findAllExchangeRates() {
-        List<ExchangeRateResponse> exchangeRates = exchangeRateDAO.findAllExchangeRates();
+        List<ExchangeRateResponse> exchangeRates = exchangeRateDao.findAllExchangeRates();
         return exchangeRates;
     }
 
     public ExchangeRateResponse findExchangeRateByCurrencyPair(String pair) {
-        if (!isCurrencyPair(pair)) {
-            throw new BadRequestException(CURRENCY_PAIR_FILED_EMPTY_EXCEPTION_MESSAGE);
+        if (!isLengthCorrespondsCurrencyPair(pair)) {
+            throw new BadRequestException(ExchangeRateExceptionTemplate.CURRENCY_PAIR_FIELD_EMPTY);
         }
         String baseCurrencyCode = pair.substring(0, CURRENCY_CODE_LENGTH).toUpperCase();
         String targetCurrencyCode = pair.substring(CURRENCY_CODE_LENGTH).toUpperCase();
+        try {
+            ExchangeRateResponse foundRate = findExchangeRateByCurrencyPair(baseCurrencyCode, targetCurrencyCode);
+            return foundRate;
+        } catch (NotFoundException ex) {
+            throw new NotFoundException(ex.getMessage());
+        }
+    }
+
+    private ExchangeRateResponse findExchangeRateByCurrencyPair(String baseCurrencyCode, String targetCurrencyCode)
+            throws NotFoundException {
         ExchangeRateResponse foundExchangeRate =
-                exchangeRateDAO.findExchangeRateByCurrencyPair(baseCurrencyCode, targetCurrencyCode)
-                        .orElseThrow(() -> {
-                            String message = String.format(RATE_NOT_FOUND_TEMPLATE, baseCurrencyCode, targetCurrencyCode);
-                            return new NotFoundException(message);
-                        });
+                exchangeRateDao.findExchangeRateByCurrencyPair(baseCurrencyCode, targetCurrencyCode).orElseThrow(() -> {
+                    String exceptionMessage = String.format(ExchangeRateExceptionTemplate.RATE_NOT_FOUND,
+                            baseCurrencyCode, targetCurrencyCode);
+                    return new NotFoundException(exceptionMessage);
+                });
         return foundExchangeRate;
     }
 
     public ExchangeRateResponse save(String baseCode, String targetCode, String rate) {
-        String baseFormatedCode = baseCode.toUpperCase();
-        String targetFormatedCode = targetCode.toUpperCase();
-        BigDecimal rateToExchange = convertRateToBigDecimal(rate)
-                .orElseThrow(() -> new BadRequestException("Rate must be a number"));
-        if (BigDecimal.ZERO.compareTo(rateToExchange) != -1) {
-            throw new BadRequestException("Rate must be greater than zero");
+        BigDecimal formattedRate;
+        try {
+            formattedRate = convertAndCheckRate(rate);
+        } catch (BadRequestException e) {
+            throw new BadRequestException(e.getMessage());
         }
-        Currency baseCurrency = currencyDAO.findCurrencyByCode(baseFormatedCode)
-                .orElseThrow(() -> {
-                    String exceptionMessage = String.format(CURRENCY_NOT_FOUND_TEMPLATE, baseFormatedCode);
-                    return new NotFoundException(exceptionMessage);
-                });
-        Currency targetCurrency = currencyDAO.findCurrencyByCode(targetFormatedCode)
-                .orElseThrow(() -> {
-                    String exceptionMessage = String.format(CURRENCY_NOT_FOUND_TEMPLATE, targetFormatedCode);
-                    return new NotFoundException(exceptionMessage);
-                });
-        boolean isExchangeRateExist = exchangeRateDAO.isExchangeRateAlreadyExist(baseFormatedCode, targetFormatedCode);
+        Currency baseCurrency;
+        Currency targetCurrency;
+        try {
+            baseCurrency = currencyService.findCurrencyByCode(baseCode);
+            targetCurrency = currencyService.findCurrencyByCode(targetCode);
+        } catch (NotFoundException ex) {
+            throw new NotFoundException(ex.getMessage());
+        }
+        try {
+            ExchangeRate savedExchangeRate = save(baseCurrency, targetCurrency, formattedRate);
+            ExchangeRateResponse response = createExchangeRateResponse(savedExchangeRate, baseCurrency, targetCurrency);
+            return response;
+        } catch (AlreadyExistException ex) {
+            throw new AlreadyExistException(ex.getMessage());
+        }
+    }
+
+    private ExchangeRate save(Currency baseCurrency, Currency targetCurrency, BigDecimal rate)
+            throws AlreadyExistException {
+        String baseCurrencyCode = baseCurrency.getCode();
+        String targetCurrencyCode = targetCurrency.getCode();
+        boolean isExchangeRateExist = exchangeRateDao.isExchangeRateAlreadyExist(baseCurrencyCode, targetCurrencyCode);
         if (isExchangeRateExist) {
-            String exceptionMessage = String.format(RATE_AlREADY_EXIST_TEMPLATE, baseFormatedCode, targetFormatedCode);
+            String exceptionMessage = String.format(ExchangeRateExceptionTemplate.RATE_AlREADY_EXIST,
+                    baseCurrencyCode, targetCurrencyCode);
             throw new AlreadyExistException(exceptionMessage);
         }
-        ExchangeRate exchangeRate = new ExchangeRate(0, baseCurrency.getId(), targetCurrency.getId(), rateToExchange);
-        ExchangeRate savedExchangeRate = exchangeRateDAO.save(exchangeRate);
-        long savedId = savedExchangeRate.getId();
-        BigDecimal savedRate = savedExchangeRate.getRate();
-        ExchangeRateResponse response = new ExchangeRateResponse(savedId, baseCurrency, targetCurrency, savedRate);
+        long baseId = baseCurrency.getId();
+        long targetId = targetCurrency.getId();
+        ExchangeRate exchangeRate = new ExchangeRate(null, baseId, targetId, rate);
+        ExchangeRate savedExchangeRate = exchangeRateDao.save(exchangeRate);
+        return savedExchangeRate;
+    }
+
+    private ExchangeRateResponse createExchangeRateResponse(ExchangeRate exchangeRate, Currency base, Currency target) {
+        long rateId = exchangeRate.getId();
+        BigDecimal rate = exchangeRate.getRate();
+        ExchangeRateResponse response = new ExchangeRateResponse(rateId, base, target, rate);
         return response;
     }
 
     public ExchangeRateResponse update(String currencyPair, String rate) {
-        if (!isCurrencyPair(currencyPair)) {
-            throw new BadRequestException(CURRENCY_PAIR_FILED_EMPTY_EXCEPTION_MESSAGE);
+        if (!isLengthCorrespondsCurrencyPair(currencyPair)) {
+            throw new BadRequestException(ExchangeRateExceptionTemplate.CURRENCY_PAIR_FIELD_EMPTY);
         }
-        if (!isCorrectInputField(rate)) {
-            throw new BadRequestException("The field rate must not be empty");
-        }
-        BigDecimal exchangeRate = convertRateToBigDecimal(rate)
-                .orElseThrow(() -> new BadRequestException("Rate must be a number"));
-        if (BigDecimal.ZERO.compareTo(exchangeRate) != -1) {
-            throw new BadRequestException("Rate must be greater than zero");
+        BigDecimal exchangeRate;
+        try {
+            exchangeRate = convertAndCheckRate(rate);
+        } catch (BadRequestException ex) {
+            throw new BadRequestException(ex.getMessage());
         }
         String baseCode = currencyPair.substring(0, CURRENCY_CODE_LENGTH).toUpperCase();
         String targetCode = currencyPair.substring(CURRENCY_CODE_LENGTH).toUpperCase();
-        boolean isExchangeRateExist = exchangeRateDAO.isExchangeRateAlreadyExist(baseCode, targetCode);
+        try {
+            ExchangeRateResponse updatedRate = update(baseCode, targetCode, exchangeRate);
+            return updatedRate;
+        } catch (NotFoundException ex) {
+            throw new NotFoundException(ex.getMessage());
+        }
+    }
+
+    private ExchangeRateResponse update(String baseCode, String targetCode, BigDecimal rate) throws NotFoundException {
+        boolean isExchangeRateExist = exchangeRateDao.isExchangeRateAlreadyExist(baseCode, targetCode);
         if (!isExchangeRateExist) {
-            String exceptionMessage = String.format(RATE_NOT_FOUND_TEMPLATE, baseCode, targetCode);
+            String exceptionMessage = String.format(ExchangeRateExceptionTemplate.RATE_NOT_FOUND, baseCode, targetCode);
             throw new NotFoundException(exceptionMessage);
         }
-        ExchangeRateCreation exchangeRateToUpdate = new ExchangeRateCreation(baseCode, targetCode, exchangeRate);
-        exchangeRateDAO.updateExchangeRate(exchangeRateToUpdate);
-        ExchangeRateResponse updatedRate = exchangeRateDAO.findExchangeRateByCurrencyPair(baseCode, targetCode).get();
+        ExchangeRateUpdate exchangeRateToUpdate = new ExchangeRateUpdate(baseCode, targetCode, rate);
+        exchangeRateDao.updateExchangeRate(exchangeRateToUpdate);
+        ExchangeRateResponse updatedRate = exchangeRateDao.findExchangeRateByCurrencyPair(baseCode, targetCode).get();
         return updatedRate;
     }
 
-    private boolean isCurrencyPair(String pairToCheck) {
-        boolean isCurrencyPair = (pairToCheck != null) && (pairToCheck.length() == CURRENCY_CODE_LENGTH * 2);
+    private boolean isLengthCorrespondsCurrencyPair(String pair) {
+        boolean isNotNull = pair != null;
+        boolean isCorrectPairLength = pair.length() == CURRENCY_CODE_LENGTH * 2;
+        boolean isCurrencyPair = isNotNull && isCorrectPairLength;
         return isCurrencyPair;
     }
 
-    private boolean isCorrectInputField(String fieldToCheck) {
-        boolean iCorrect = (fieldToCheck != null) && (!fieldToCheck.isBlank());
-        return iCorrect;
+    private boolean isInputFieldNotEmpty(String field) {
+        boolean isNotEmpty = (field != null) && (!field.isBlank());
+        return isNotEmpty;
     }
 
-    private Optional<BigDecimal> convertRateToBigDecimal(String rateToCovert) {
-        BigDecimal amount = null;
-        try {
-            amount = new BigDecimal(rateToCovert);
-        } catch (NumberFormatException e) {
+    private BigDecimal convertAndCheckRate(String rateToCovert) throws BadRequestException {
+        if (!isInputFieldNotEmpty(rateToCovert)) {
+            throw new BadRequestException("The field exchange rate must not be empty");
         }
-        return Optional.ofNullable(amount);
+        BigDecimal rate;
+        try {
+            rate = new BigDecimal(rateToCovert);
+        } catch (NumberFormatException e) {
+            throw new BadRequestException("The exchange rate must be a number");
+        }
+        if (BigDecimal.ZERO.compareTo(rate) != -1) {
+            throw new BadRequestException("The exchange rate must be greater than zero");
+        }
+        return rate;
     }
 }
 

@@ -11,7 +11,7 @@ import java.math.BigDecimal;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-public class ExchangeRateCreation {
+public class ExchangeRateUpdate {
     private String baseCurrencyCode;
     private String targetCurrencyCode;
     private BigDecimal rate;

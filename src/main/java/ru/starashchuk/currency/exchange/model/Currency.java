@@ -10,7 +10,7 @@ import lombok.Setter;
 @NoArgsConstructor
 @AllArgsConstructor
 public class Currency {
-    private long id;
+    private Long id;
     private String code;
     private String fullName;
     private String sign;
